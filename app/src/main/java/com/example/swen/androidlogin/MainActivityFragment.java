@@ -11,6 +11,8 @@ import android.location.LocationManager;
 import android.os.AsyncTask;
 import android.support.v4.app.Fragment;
 import android.os.Bundle;
+import android.support.v7.widget.LinearLayoutManager;
+import android.support.v7.widget.RecyclerView;
 import android.telecom.Call;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -30,6 +32,8 @@ import com.facebook.Profile;
 import com.facebook.login.LoginResult;
 import com.facebook.login.widget.LoginButton;
 
+import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.IOException;
@@ -50,16 +54,21 @@ import javax.xml.transform.Result;
  * A placeholder fragment containing a simple view.
  */
 public class MainActivityFragment extends Fragment {
-    CallbackManager callbackManager;
-    TextView welcomeTextView;
-    TextView latLongTextView;
-    LocationManager locMgr;
-    LocationListener locListen;
-    double latitude = -1.0;
-    double longitude = -1.0;
-    String email;
-    String uid;
-    String name;
+    private CallbackManager callbackManager;
+    private TextView welcomeTextView;
+    private TextView latLongTextView;
+    private LocationManager locMgr;
+    private LocationListener locListen;
+    private double latitude = -1.0;
+    private double longitude = -1.0;
+    private HttpURLConnection myConn = null;
+    private String email;
+    private String uid;
+    private String name;
+    private ArrayList<JSONObject> dataSet;
+    private RecyclerView mRecyclerView;
+    private RecyclerView.Adapter mAdapter;
+    private RecyclerView.LayoutManager mLayoutManager;
 
     public MainActivityFragment() {
     }
@@ -72,6 +81,7 @@ public class MainActivityFragment extends Fragment {
         email = "abc@def.mail.com";
         uid = "abcdef12345";
         name = "John Doe";
+        dataSet = new ArrayList<JSONObject>();
     }
 
     @Override
@@ -106,7 +116,8 @@ public class MainActivityFragment extends Fragment {
 
                         //Execute HTTP REST API to the DB
                         String stringURL = "http://192.168.1.66:8080/";
-                        new HttpActivity().execute(stringURL);
+                        String operation = "POST";
+                        new HttpActivity().execute(stringURL, operation);
                     }
                 });
                 Bundle param = new Bundle();
@@ -134,6 +145,12 @@ public class MainActivityFragment extends Fragment {
                     Log.v("SwenDev", "Logging out from Facebook");
                     welcomeTextView.setVisibility(View.GONE);
                     latLongTextView.setVisibility(View.GONE);
+                    for (int i = 0; i < dataSet.size(); i++) {
+                        dataSet.remove(i);
+                    }
+                    String stringURL = "http://192.168.1.66:8080/" + email;
+                    String operation = "DELETE";
+                    new HttpActivity().execute(stringURL, operation);
                 }
             }
         };
@@ -143,6 +160,14 @@ public class MainActivityFragment extends Fragment {
         welcomeTextView.setVisibility(View.GONE);
         latLongTextView = (TextView) view.findViewById(R.id.latLongTextView);
         latLongTextView.setVisibility(View.GONE);
+
+        //RecyclerView
+        mRecyclerView = (RecyclerView) view.findViewById(R.id.my_recycler_view);
+        mRecyclerView.setHasFixedSize(true);
+        mLayoutManager = new LinearLayoutManager(view.getContext(), LinearLayoutManager.VERTICAL, false);
+        mRecyclerView.setLayoutManager(mLayoutManager);
+        mAdapter = new MyAdapter(dataSet);
+        mRecyclerView.setAdapter(mAdapter);
 
         //Location tracker
         locMgr = (LocationManager) getActivity().getSystemService(Context.LOCATION_SERVICE);
@@ -205,7 +230,7 @@ public class MainActivityFragment extends Fragment {
 
         protected String doInBackground(String... urls) {
             try {
-                return handleURL(urls[0]);
+                return handleURL(urls[0], urls[1]);
             } catch (Exception e) {
                 return "Error in HttpActivity operation";
             }
@@ -213,37 +238,86 @@ public class MainActivityFragment extends Fragment {
 
         @Override
         protected void onPostExecute(String result) {
+
+            if (myConn != null) {
+                Log.v("SwenDev", "myConn is disconnecting");
+                myConn.disconnect();
+                myConn = null;
+            }
+
+            if (result == null) {
+                Log.d("SwenDev", "Result is NULL");
+                return;
+            }
+
             Log.d("SwenDev", "The result is: " + result);
+
+            //Parse JSON object and assign it to dataSet.
+            try {
+                if (result.contains("{data")) {
+                    JSONObject jObject = new JSONObject(result);
+                    JSONArray jArray = jObject.getJSONArray("data");
+                    for (int i = 0; i < jArray.length(); i++) {
+                        JSONObject obj = jArray.getJSONObject(i);
+                        Log.v("SwenDev", "email: " + obj.optString("email"));
+                        dataSet.add(obj);
+                    }
+                }
+            }catch (JSONException e) {
+                throw new RuntimeException(e);
+            }
         }
 
-        private String handleURL(String myURL) throws IOException, org.json.JSONException {
+        private String handleURL(String myURL, String operation) throws IOException, org.json.JSONException {
             InputStream is = null;
             int len = 500;
 
             try {
+                Log.v("SwenDev", "myURL: " + myURL);
                 URL url = new URL(myURL);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setReadTimeout(10000);
-                conn.setConnectTimeout(15000);
-                conn.setRequestMethod("POST");
-                conn.setDoInput(true);
-                conn.setDoOutput(true);
-                conn.setRequestProperty("Content-Type", "application/json");
-                conn.setRequestProperty("Accept", "application/json");
-                JSONObject data = new JSONObject();
-                data.put("username", name);
-                data.put("latitude", latitude);
-                data.put("longitude", longitude);
-                conn.connect();
-                OutputStreamWriter wr = new OutputStreamWriter(conn.getOutputStream());
-                wr.write(data.toString());
-                wr.flush();
-                int response = conn.getResponseCode();
-                Log.d("SwenDev", "The response is: " + response);
-                is = conn.getInputStream();
 
-                String contentAsString = readIt(is, len);
-                return contentAsString;
+                if (myConn == null) {
+                    myConn = (HttpURLConnection) url.openConnection();
+                }
+
+                if (operation.equals("POST")) {
+                    myConn.setReadTimeout(10000);
+                    myConn.setConnectTimeout(15000);
+                    myConn.setRequestMethod("POST");
+                    myConn.setDoInput(true);
+                    myConn.setDoOutput(true);
+                    myConn.setRequestProperty("Content-Type", "application/json");
+                    myConn.setRequestProperty("Accept", "application/json");
+                    JSONObject data = new JSONObject();
+                    JSONObject loc = new JSONObject();
+                    loc.put("lon", longitude);
+                    loc.put("lat", latitude);
+                    data.put("email", email);
+                    data.put("loc", loc.toString());
+                    OutputStreamWriter wr = new OutputStreamWriter(myConn.getOutputStream());
+                    wr.write(data.toString());
+                    wr.flush();
+                    int responseCode = myConn.getResponseCode();
+                    Log.v("SwenDev", "The response is: " + responseCode);
+                    is = myConn.getInputStream();
+                    String contentAsString = readIt(is, len);
+                    return contentAsString;
+                }
+                else if (operation.equals("DELETE")) {
+                    Log.v("SwenDev", "Setting up HTTP DELETE");
+                    myConn.setReadTimeout(10000);
+                    myConn.setConnectTimeout(15000);
+                    myConn.setRequestMethod("DELETE");
+                    myConn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+                    myConn.connect();
+                    int responseCode = myConn.getResponseCode();
+                    is = myConn.getInputStream();
+                    String contentAsString = readIt(is, len);
+                    return contentAsString;
+                }
+                else {
+                    return null;
+                }
             } finally {
                 if (is != null)
                     is.close();
@@ -255,6 +329,7 @@ public class MainActivityFragment extends Fragment {
             reader = new InputStreamReader(istream, "UTF-8");
             char [] buffer = new char[length];
             reader.read(buffer);
+            istream.close();
             return new String(buffer);
         }
     }
